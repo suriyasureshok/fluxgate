@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # 1. The Rust Data Plane (Your Semantic Token Bucket)
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: fluxgate-gateway
+    ports:
+      - "8443:8443"
+    environment:
+      - DOWNSTREAM_AI_URL=http://host.docker.internal:11434
+      - RUST_LOG=info
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # 2. The Cloudflare Quick Tunnel (Free Public Internet Access)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: fluxgate-tunnel
+    command: tunnel --url https://gateway:8443 --no-tls-verify
+    restart: unless-stopped
+    depends_on:
+      - gateway
