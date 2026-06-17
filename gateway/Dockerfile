@@ -1,14 +1,22 @@
-# --- Stage 1: Build & Compilation ---
+# --- Stage 1: Build & Dependency Caching ---
 FROM rust:1.85-slim-bookworm AS builder
 WORKDIR /app
 
 # Install compilation system dependencies
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace code configuration files
+# Cache dependencies: Create a dummy project to build dependencies first
 COPY Cargo.toml ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+RUN rm -rf src
+
+# Copy actual workspace code configuration files
 COPY src ./src
 COPY certs ./certs
+
+# Touch the main file to force Cargo to recompile our actual code, not the dummy file
+RUN touch src/main.rs
 
 # Build optimized binary target
 RUN cargo build --release
@@ -17,20 +25,21 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# Install CA certificates to allow outgoing secure client requests to AI backends
+# Create a non-root user for security
+RUN useradd -m -s /bin/bash fluxgate
+
+# Install CA certificates to allow outgoing secure client requests
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Copy compiled binary artifact from the builder phase
-COPY --from=builder /app/target/release/gateway /app/fluxgate-gateway
+# Copy compiled binary artifact and assign ownership to the non-root user
+COPY --from=builder --chown=fluxgate:fluxgate /app/target/release/gateway /app/fluxgate-gateway
+COPY --from=builder --chown=fluxgate:fluxgate /app/certs/*.pem /app/certs/
 
-# Copy certs with the correct names - IMPORTANT FIX!
-COPY --from=builder /app/certs/*.pem /app/certs/
+# Secure the container by switching to the non-root user
+USER fluxgate
 
 # Set standard environment pointers
-ENV DOWNSTREAM_AI_URL=https://api.openai.com
 ENV CARGO_MANIFEST_DIR=/app
-ENV TLS_CERT_NAME=api.fluxgate.local+2.pem
-ENV TLS_KEY_NAME=api.fluxgate.local+2-key.pem
 
 EXPOSE 8443 9090
 CMD ["./fluxgate-gateway"]

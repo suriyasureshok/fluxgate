@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = "0.7"
+async-trait = "0.1"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -15,3 +16,9 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 trust-dns-proto = "0.23"
 clap = { version = "4.0", features = ["derive"] }
 dotenvy = "0.15"
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+sha2 = "0.10" # For secure API Key hashing
+hex = "0.4"   # To convert hashes to strings
+rand = "0.8"
+uuid = { version = "1.6", features = ["v4", "serde"] }
