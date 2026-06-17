@@ -110,7 +110,13 @@ pub async fn handle_dns_query(State(state): State<Arc<DohState>>, body: Bytes) -
     }
 
     // 4. Return the binary DoH payload to the client
-    let response_bytes = response.to_vec().unwrap();
+    let response_bytes = match response.to_vec() {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::error!("Failed to serialize DNS response: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR).into_response();
+        }
+    };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/dns-message")],

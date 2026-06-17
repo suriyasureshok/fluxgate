@@ -53,40 +53,46 @@ impl UpstreamProvider {
 #[async_trait::async_trait]
 impl DnsProvider for UpstreamProvider {
     async fn resolve(&self, domain: &str) -> Option<Vec<IpAddr>> {
-        // Query the upstream provider using the standard 'application/dns-json' format
-        let url = format!("{}?name={}&type=A", self.endpoint_url, domain);
+        let mut ips = Vec::new();
 
-        let response = match self
-            .client
-            .get(&url)
-            .header("Accept", "application/dns-json")
-            .send()
-            .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!("Upstream DoH Provider timeout/failure: {}", e);
-                return None;
-            }
-        };
+        // Query both A and AAAA records
+        for record_type in ["A", "AAAA"] {
+            let url = format!("{}?name={}&type={}", self.endpoint_url, domain, record_type);
 
-        if let Ok(json) = response.json::<DohJsonResponse>().await {
-            if let Some(answers) = json.answer {
-                let mut ips = Vec::new();
-                for answer in answers {
-                    // Only process A (1) and AAAA (28) records
-                    if answer.record_type == 1 || answer.record_type == 28 {
-                        if let Ok(ip) = IpAddr::from_str(&answer.data) {
-                            ips.push(ip);
+            let response = match self
+                .client
+                .get(&url)
+                .header("Accept", "application/dns-json")
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::warn!(
+                        "Upstream DoH Provider timeout/failure for {}: {}",
+                        record_type,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if let Ok(json) = response.json::<DohJsonResponse>().await {
+                if let Some(answers) = json.answer {
+                    for answer in answers {
+                        if answer.record_type == 1 || answer.record_type == 28 {
+                            if let Ok(ip) = IpAddr::from_str(&answer.data) {
+                                ips.push(ip);
+                            }
                         }
                     }
                 }
-
-                if !ips.is_empty() {
-                    tracing::debug!("Upstream resolved {} to {:?}", domain, ips);
-                    return Some(ips);
-                }
             }
+        }
+
+        if !ips.is_empty() {
+            tracing::debug!("Upstream resolved {} to {:?}", domain, ips);
+            return Some(ips);
         }
 
         None

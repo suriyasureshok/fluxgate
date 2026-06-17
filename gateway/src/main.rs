@@ -45,31 +45,48 @@ struct AdminUpdateLimitRequest {
 async fn handle_admin_update_limit(
     State(state): State<Arc<GatewayState>>,
     Json(payload): Json<AdminUpdateLimitRequest>,
-) -> &'static str {
+) -> (axum::http::StatusCode, &'static str) {
     tracing::warn!(
         "Control Plane invoked Override for Identity: {}",
         payload.identifier
     );
 
-    if let Ok(mut con) = state.redis_client.get_async_connection().await {
-        let bucket_key = format!("fluxgate:rate_limit:{}", payload.identifier);
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+    let Ok(mut con) = state.redis_client.get_async_connection().await else {
+        tracing::error!("Failed to connect to Redis for rate limit override");
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Redis unavailable",
+        );
+    };
 
-        let _: () = redis::pipe()
-            .atomic()
-            .hset(&bucket_key, "tokens", payload.capacity)
-            .hset(&bucket_key, "last_refill", now)
-            .hset(&bucket_key, "capacity", payload.capacity)
-            .hset(&bucket_key, "refill_rate", payload.refill_rate)
-            .expire(&bucket_key, 86400)
-            .query_async(&mut con)
-            .await
-            .unwrap_or(());
+    let bucket_key = format!("fluxgate:rate_limit:{}", payload.identifier);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+
+    match redis::pipe()
+        .atomic()
+        .hset(&bucket_key, "tokens", payload.capacity)
+        .hset(&bucket_key, "last_refill", now)
+        .hset(&bucket_key, "capacity", payload.capacity)
+        .hset(&bucket_key, "refill_rate", payload.refill_rate)
+        .expire(&bucket_key, 86400)
+        .query_async(&mut con)
+        .await
+    {
+        Ok(()) => (
+            axum::http::StatusCode::OK,
+            "Gateway rules successfully overridden in Cache.\n",
+        ),
+        Err(e) => {
+            tracing::error!("Redis pipeline failed: {e}");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to update cache",
+            )
+        }
     }
-    "Gateway rules successfully overridden in Cache.\n"
 }
 
 /// Control Plane Handler: Telemetry Endpoint for the AI Analyzer
@@ -129,7 +146,15 @@ async fn main() {
         .expect("CRITICAL BOOT FAILURE: CLUSTER_IPS environment variable is missing.");
     let cluster_ips: Vec<IpAddr> = cluster_ips_str
         .split(',')
-        .filter_map(|s| IpAddr::from_str(s.trim()).ok())
+        .map(|s| {
+            let ip_str = s.trim();
+            IpAddr::from_str(ip_str).unwrap_or_else(|_| {
+                panic!(
+                    "CRITICAL BOOT FAILURE: Invalid IP address in CLUSTER_IPS: '{}'",
+                    ip_str
+                );
+            })
+        })
         .collect();
     let cluster_domain =
         std::env::var("CLUSTER_DOMAIN").unwrap_or_else(|_| "api.fluxgate.local".to_string());

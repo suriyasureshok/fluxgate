@@ -53,7 +53,7 @@ pub async fn generate_api_key(
 
     // 5. Execute the Insertion
     let result =
-        sqlx::query("INSERT INTO api_keys (user_id, key_hash, key_prefix) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO api_keys (user_id, key_hash, key_prefix, status) VALUES ($1, $2, $3, 'active')")
             .bind(payload.user_id)
             .bind(&key_hash)
             .bind(&key_prefix)

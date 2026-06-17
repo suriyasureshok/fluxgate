@@ -40,8 +40,7 @@ impl DnsProvider for LocalClusterProvider {
 
             // Atomic Round-Robin Selection (Fast, non-blocking)
             let index = self.current_index.fetch_add(1, Ordering::Relaxed);
-            let selected_ip = self.node_ips[index & (self.node_ips.len() - 1)];
-
+            let selected_ip = self.node_ips[index % self.node_ips.len()];
             tracing::debug!("DNS Intercept: Routed {} to Node {}", domain, selected_ip);
 
             // Return exactly one IP to force the client to connect to that specific node

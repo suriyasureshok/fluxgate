@@ -39,7 +39,8 @@ COPY --from=builder --chown=fluxgate:fluxgate /app/certs/*.pem /app/certs/
 USER fluxgate
 
 # Set standard environment pointers
-ENV CARGO_MANIFEST_DIR=/app
+ENV TLS_CERT_PATH=/app/certs/cert.pem
+ENV TLS_KEY_PATH=/app/certs/key.pem
 
 EXPOSE 8443 9090
 CMD ["./fluxgate-gateway"]
