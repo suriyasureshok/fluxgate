@@ -5,6 +5,7 @@ target/
 *.exp
 *.lib
 *.dylib
+*.lock
 
 # Python
 __pycache__/
