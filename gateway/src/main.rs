@@ -2,11 +2,11 @@
 //! Fluxgate Enterprise API Gateway
 //! Module: Main Orchestrator & Entrypoint
 //! ---------------------------------------------------------------------------
-//!
-//! The absolute root of the Gateway execution. Responsible for reading system
-//! environment variables, initializing distributed connection pools (Redis/Postgres),
-//! constructing the Axum routers, and binding to the network interfaces.
 
+use axum::http::{
+    Method,
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+};
 use axum::{
     Json, Router,
     extract::State,
@@ -16,27 +16,29 @@ use axum_server::tls_rustls::RustlsConfig;
 use redis::AsyncCommands;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::signal;
+use tower_http::cors::CorsLayer;
 
 // Internal Modules
 pub mod admin;
 pub mod auth;
 pub mod doh;
 pub mod infrastructure;
+pub mod portal_auth;
 pub mod proxy;
 pub mod rate_limiter;
 
+use crate::doh::DnsProvider;
+use crate::doh::local::LocalClusterProvider;
 use infrastructure::GatewayState;
 
-/// Payload structure for the internal Control Plane to update API Key rules dynamically.
 #[derive(Deserialize, Debug)]
 struct AdminUpdateLimitRequest {
-    pub identifier: String, // The hashed API key or user ID
+    pub identifier: String,
     pub capacity: f64,
     pub refill_rate: f64,
 }
@@ -47,17 +49,22 @@ async fn handle_admin_update_limit(
     Json(payload): Json<AdminUpdateLimitRequest>,
 ) -> (axum::http::StatusCode, &'static str) {
     tracing::warn!(
-        "Control Plane invoked Override for Identity: {}",
+        "Control Plane Override for Identity: {}",
         payload.identifier
     );
 
-    let Ok(mut con) = state.redis_client.get_async_connection().await else {
-        tracing::error!("Failed to connect to Redis for rate limit override");
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Redis unavailable",
-        );
-    };
+    // Hardened pool acquisition with timeout
+    let mut con =
+        match tokio::time::timeout(Duration::from_millis(100), state.redis_pool.get()).await {
+            Ok(Ok(c)) => c,
+            _ => {
+                tracing::error!("Redis pool exhausted during Admin override.");
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "Control Plane Offline",
+                );
+            }
+        };
 
     let bucket_key = format!("fluxgate:rate_limit:{}", payload.identifier);
     let now = SystemTime::now()
@@ -77,7 +84,7 @@ async fn handle_admin_update_limit(
     {
         Ok(()) => (
             axum::http::StatusCode::OK,
-            "Gateway rules successfully overridden in Cache.\n",
+            "Gateway rules overridden in Cache.\n",
         ),
         Err(e) => {
             tracing::error!("Redis pipeline failed: {e}");
@@ -94,88 +101,80 @@ async fn handle_admin_metrics(
     State(state): State<Arc<GatewayState>>,
 ) -> Json<HashMap<String, f64>> {
     let mut snapshot = HashMap::new();
-    if let Ok(mut con) = state.redis_client.get_async_connection().await {
-        if let Ok(keys) = con.keys::<&str, Vec<String>>("fluxgate:rate_limit:*").await {
-            for key in keys {
-                if let Ok(tokens) = con.hget::<&str, &str, f64>(&key, "tokens").await {
-                    let identifier = key.replace("fluxgate:rate_limit:", "");
-                    snapshot.insert(identifier, tokens);
-                }
+
+    let mut scan_con =
+        match tokio::time::timeout(Duration::from_millis(100), state.redis_pool.get()).await {
+            Ok(Ok(c)) => c,
+            _ => return Json(snapshot), // Return empty metrics rather than hanging the AI agent
+        };
+
+    let mut fetch_con =
+        match tokio::time::timeout(Duration::from_millis(100), state.redis_pool.get()).await {
+            Ok(Ok(c)) => c,
+            _ => return Json(snapshot), // Return empty metrics rather than hanging the AI agent
+        };
+
+    if let Ok(mut iter) = scan_con
+        .scan_match::<_, String>("fluxgate:rate_limit:*")
+        .await
+    {
+        while let Some(key) = iter.next_item().await {
+            if let Ok(tokens) = fetch_con.hget::<&str, &str, f64>(&key, "tokens").await {
+                let identifier = key.replace("fluxgate:rate_limit:", "");
+                snapshot.insert(identifier, tokens);
             }
         }
     }
+
     Json(snapshot)
 }
 
 #[tokio::main]
 async fn main() {
-    // 1. Initialize Telemetry & Logging
     tracing_subscriber::fmt::init();
     tracing::info!("Booting Fluxgate Edge Gateway Engine...");
 
-    // 2. Strict Environment Configuration (Fail-Fast Pattern)
-    let redis_url = std::env::var("REDIS_URL")
-        .expect("CRITICAL BOOT FAILURE: REDIS_URL environment variable is missing.");
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("CRITICAL BOOT FAILURE: DATABASE_URL environment variable is missing.");
+    let redis_url = std::env::var("REDIS_URL").expect("Missing REDIS_URL");
+    let database_url = std::env::var("DATABASE_URL").expect("Missing DATABASE_URL");
 
-    let cert_path_str = std::env::var("TLS_CERT_PATH")
-        .expect("CRITICAL BOOT FAILURE: TLS_CERT_PATH environment variable is missing.");
-    let key_path_str = std::env::var("TLS_KEY_PATH")
-        .expect("CRITICAL BOOT FAILURE: TLS_KEY_PATH environment variable is missing.");
-    let cert_path = PathBuf::from(cert_path_str);
-    let key_path = PathBuf::from(key_path_str);
+    let cert_path = PathBuf::from(std::env::var("TLS_CERT_PATH").expect("Missing TLS_CERT_PATH"));
+    let key_path = PathBuf::from(std::env::var("TLS_KEY_PATH").expect("Missing TLS_KEY_PATH"));
 
     let public_port: u16 = std::env::var("PUBLIC_PORT")
         .unwrap_or_else(|_| "8443".to_string())
         .parse()
-        .expect("CRITICAL BOOT FAILURE: PUBLIC_PORT must be a valid port number.");
+        .unwrap();
     let admin_port: u16 = std::env::var("ADMIN_PORT")
         .unwrap_or_else(|_| "9090".to_string())
         .parse()
-        .expect("CRITICAL BOOT FAILURE: ADMIN_PORT must be a valid port number.");
+        .unwrap();
 
-    let downstream_urls_str = std::env::var("DOWNSTREAM_AI_URLS")
-        .expect("CRITICAL BOOT FAILURE: DOWNSTREAM_AI_URLS environment variable is missing.");
-    let downstream_urls: Vec<String> = downstream_urls_str
+    let downstream_urls: Vec<String> = std::env::var("DOWNSTREAM_AI_URLS")
+        .expect("Missing DOWNSTREAM_AI_URLS")
         .split(',')
         .map(|s| s.trim().to_string())
         .collect();
 
-    let cluster_ips_str = std::env::var("CLUSTER_IPS")
-        .expect("CRITICAL BOOT FAILURE: CLUSTER_IPS environment variable is missing.");
-    let cluster_ips: Vec<IpAddr> = cluster_ips_str
-        .split(',')
-        .map(|s| {
-            let ip_str = s.trim();
-            IpAddr::from_str(ip_str).unwrap_or_else(|_| {
-                panic!(
-                    "CRITICAL BOOT FAILURE: Invalid IP address in CLUSTER_IPS: '{}'",
-                    ip_str
-                );
-            })
-        })
-        .collect();
     let cluster_domain =
         std::env::var("CLUSTER_DOMAIN").unwrap_or_else(|_| "api.fluxgate.local".to_string());
 
-    // 3. Initialize the Distributed State Infrastructure
+    // 1. Initialize Distributed State
     let gateway_state =
         Arc::new(infrastructure::GatewayState::initialize(&database_url, &redis_url).await);
     let proxy_state = Arc::new(proxy::ProxyState::new(downstream_urls));
 
-    let primary_provider = Box::new(doh::local::LocalClusterProvider::new(
-        &cluster_domain,
-        cluster_ips,
-    ));
+    // 2. Wire up dynamic DoH provider (Pass a raw client for the background worker)
+    let doh_redis_client =
+        redis::Client::open(redis_url.clone()).expect("Failed to build DoH Redis Client");
+    let primary_provider: Box<dyn DnsProvider> =
+        Box::new(LocalClusterProvider::new(&cluster_domain, doh_redis_client));
+
     let doh_state = Arc::new(doh::DohState {
         primary_provider,
-        fallback_provider: None, // Can be injected later via env variable logic
+        fallback_provider: None,
     });
 
-    // 4. Build the Segmented Axum Routers
-
-    // Perimeter 1: Public Routes (No Auth required)
+    // 3. Build Axum Routers
     let public_routes = Router::new()
         .route(
             "/dns-query",
@@ -183,7 +182,14 @@ async fn main() {
         )
         .route("/health", get(|| async { "Gateway Online" }));
 
-    // Perimeter 2: Protected AI Core (Requires Valid DB Key -> Rate Limit -> Proxy)
+    // Portal/Frontend Routes (Publicly accessible, but handles its own session validation internally)
+    let portal_routes = Router::new()
+        .route("/portal/register", post(portal_auth::register))
+        .route("/portal/login", post(portal_auth::login))
+        .route("/portal/logout", post(portal_auth::logout))
+        .route("/portal/me", get(portal_auth::get_me))
+        .with_state(gateway_state.clone());
+
     let protected_routes = Router::new()
         .route(
             "/v1/*path",
@@ -198,34 +204,45 @@ async fn main() {
             auth::auth_guard,
         ));
 
-    // Merge the data plane perimeters
-    let public_app = public_routes.merge(protected_routes);
+    // CORS Layer
+    let cors = CorsLayer::new()
+        // Explicitly allow your frontend origins (Update these if your local server uses a different port)
+        .allow_origin([
+            "http://localhost:5500".parse().unwrap(),
+            "http://127.0.0.1:5500".parse().unwrap(),
+            "http://localhost:3000".parse().unwrap(),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION, ACCEPT])
+        .allow_credentials(true);
 
-    // 5. Build and Spawn the Internal Control Plane
     let admin_app = Router::new()
         .route("/admin/keys/generate", post(admin::generate_api_key))
         .route("/admin/rate_limit", post(handle_admin_update_limit))
         .route("/admin/metrics", get(handle_admin_metrics))
-        .with_state(gateway_state.clone());
+        .with_state(gateway_state.clone())
+        .layer(cors.clone());
 
+    let public_app = public_routes
+        .merge(protected_routes)
+        .merge(portal_routes)
+        .layer(cors);
+
+    // 4. Spawn Control Plane
     tokio::spawn(async move {
         let admin_addr = SocketAddr::from(([0, 0, 0, 0], admin_port));
         let listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
-        tracing::info!(
-            "Fluxgate Internal Control Plane listening securely on http://{}",
-            admin_addr
-        );
+        tracing::info!("Internal Control Plane listening on http://{}", admin_addr);
         axum::serve(listener, admin_app).await.unwrap();
     });
 
-    // 6. Start the Public TLS Server
+    // 5. Start TLS Data Plane
     let tls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
         .await
-        .expect("CRITICAL BOOT FAILURE: Failed to load TLS Certificates.");
-
+        .unwrap();
     let public_addr = SocketAddr::from(([0, 0, 0, 0], public_port));
     tracing::info!(
-        "Fluxgate Public Data Plane running securely at https://{}",
+        "Public Data Plane running securely at https://{}",
         public_addr
     );
 
@@ -236,8 +253,6 @@ async fn main() {
         .unwrap();
 }
 
-/// Graceful Shutdown Hook
-/// Catches SIGTERM / SIGINT and allows active network requests to finish draining.
 fn shutdown_signal() -> axum_server::Handle {
     let handle = axum_server::Handle::new();
     let spawn_handle = handle.clone();
@@ -258,7 +273,7 @@ fn shutdown_signal() -> axum_server::Handle {
 
         tokio::select! { _ = ctrl_c => {}, _ = terminate => {}, }
 
-        tracing::warn!("Termination signal received. Draining connections and shutting down...");
+        tracing::warn!("Termination signal received. Draining connections...");
         spawn_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
     });
 
