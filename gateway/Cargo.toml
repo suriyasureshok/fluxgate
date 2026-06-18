@@ -3,7 +3,7 @@ name = "fluxgate-gateway"
 version = "1.0.0"
 edition = "2024"
 authors = ["Suriya Sureshkumar <suriyasureshkumarkannian@gmail.com>"]
-description = "High-performance edge data plane and reverse proxy for Fluxgate"
+description = "High-performance edge data plane and reverse proxy for Fluxgate with DoH Resolution and TLS Termination"
 publish = false
 
 [dependencies]
