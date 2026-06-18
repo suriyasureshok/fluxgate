@@ -31,10 +31,11 @@
 
 ## Overview
 
-The `gateway/` service is the **Data Plane** of Fluxgate — the first point of contact for every client request. It is intentionally designed as a *fast, stateless relay* that enforces authentication and streams bytes efficiently, while delegating all intelligent threat analysis to the Python-based Control Plane.
+The `gateway/` service is the **Data Plane** of Fluxgate — the first point of contact for every client request. It is intentionally designed as a _fast, stateless relay_ that enforces authentication and streams bytes efficiently, while delegating all intelligent threat analysis to the Python-based Control Plane.
 
 This separation of concerns means the gateway never blocks on expensive ML inference during the hot path. Security decisions arrive asynchronously via the admin port and are applied in-memory with zero request overhead.
-<!-- 
+
+<!--
 ```
 Client → [Nginx SPA] → [Axum Gateway :8443] → [AI Model / Ollama]
                                ↕                      ↕
@@ -49,54 +50,60 @@ Client → [Nginx SPA] → [Axum Gateway :8443] → [AI Model / Ollama]
 
 This service operates exclusively within the **Data Plane** tier. It has no knowledge of threat classification logic — that responsibility belongs to the Control Plane (`guard/`). The gateway exposes a private admin interface on port `9090` that the Control Plane uses to push throttle and pardon commands.
 
-| Tier | Service | Language | Role |
-|---|---|---|---|
-| **Data Plane** | `gateway/` (this service) | Rust | TLS, auth, proxy, metrics |
-| **Data Plane** | `doh/` | Rust | DNS-over-HTTPS resolution |
-| **Frontend** | `frontend/` | Nginx | SPA static serving |
-| **Control Plane** | `control-plane/` | Python | Threat detection, rate policy |
-| **Control Plane** | `control-plane/` | Python | Behavioral analysis via Ollama |
-| **Storage** | Redis | — | Hot-cache, metrics, events |
-| **Storage** | Supabase Postgres | — | User auth, identity |
+| Tier              | Service                   | Language | Role                           |
+| ----------------- | ------------------------- | -------- | ------------------------------ |
+| **Data Plane**    | `gateway/` (this service) | Rust     | TLS, auth, proxy, metrics      |
+| **Data Plane**    | `doh/`                    | Rust     | DNS-over-HTTPS resolution      |
+| **Frontend**      | `frontend/`               | Nginx    | SPA static serving             |
+| **Control Plane** | `control-plane/`          | Python   | Threat detection, rate policy  |
+| **Control Plane** | `control-plane/`          | Python   | Behavioral analysis via Ollama |
+| **Storage**       | Redis                     | —        | Hot-cache, metrics, events     |
+| **Storage**       | Supabase Postgres         | —        | User auth, identity            |
 
 ---
 
 ## Core Responsibilities
 
 ### Secure Ingress
+
 Terminates TLS on port `8443`. Enforces strict `SameSite=None; Secure` cookie policy for all session tokens. All plaintext connections are rejected at the socket level — the gateway does not issue redirects.
 
 ### Authentication & Authorization
+
 Validates `Authorization: Bearer <token>` headers and session cookies against the PostgreSQL `users` table. JWTs are verified using HS256 with the `JWT_SECRET` env var. Expired or tampered tokens receive an immediate `401` with no upstream call made.
 
 ### Reverse Proxying
+
 Authenticated requests are forwarded to downstream AI inference providers (Ollama by default). The `tower` middleware stack maintains streaming response integrity, preserving SSE/chunked-transfer semantics from the model all the way to the client with minimal TTFT overhead.
 
 ### Real-time Metrics Export
+
 Token consumption, request counts, and per-route latency are written to Redis on every request -- after the response is dispatched, never before. This ensures Redis write latency has zero effect on client-perceived response time.
 
 ### DNS-over-HTTPS Resolution
+
 A built-in DoH resolver handles DNS queries from clients via HTTP POST. Local overrides (e.g. `api.fluxgate.local → 0.0.0.0`) are applied before any upstream query is made, enabling zero-DNS-round-trip resolution for internal services.
 
 ### Admin Interface
+
 Port `9090` is an internal-only HTTP API, not exposed through Nginx. The Control Plane uses this endpoint to push throttle commands, pardon identities, and adjust per-user rate limits at runtime without a restart.
 
 ---
 
 ## Technical Stack
 
-| Component | Library | Version | Purpose |
-|---|---|---|---|
-| Language | Rust | 1.96+ | Systems-level performance, memory safety |
-| DNS-over-HTTPS | trust-dns-proto | latest | Async HTTP client for DoH queries |
-| Web framework | Axum | latest | Async HTTP, routing, middleware |
-| Async runtime | Tokio | latest | Non-blocking I/O, task scheduling |
-| Database driver | SQLx | latest | Async PostgreSQL with compile-time query checking |
-| Password hashing | Argon2 | latest | Argon2id for credential storage |
-| JWT | jsonwebtoken | latest | HS256 session token signing/verification |
-| Cache | async-redis | latest | Async Redis driver for metrics and session state |
-| TLS | rustls / rcgen | latest | Pure-Rust TLS stack, no OpenSSL dependency |
-| Middleware | tower / tower-http | latest / 0.5.2 | Request tracing, compression, timeouts |
+| Component        | Library            | Version        | Purpose                                           |
+| ---------------- | ------------------ | -------------- | ------------------------------------------------- |
+| Language         | Rust               | 1.96+          | Systems-level performance, memory safety          |
+| DNS-over-HTTPS   | trust-dns-proto    | latest         | Async HTTP client for DoH queries                 |
+| Web framework    | Axum               | latest         | Async HTTP, routing, middleware                   |
+| Async runtime    | Tokio              | latest         | Non-blocking I/O, task scheduling                 |
+| Database driver  | SQLx               | latest         | Async PostgreSQL with compile-time query checking |
+| Password hashing | Argon2             | latest         | Argon2id for credential storage                   |
+| JWT              | jsonwebtoken       | latest         | HS256 session token signing/verification          |
+| Cache            | async-redis        | latest         | Async Redis driver for metrics and session state  |
+| TLS              | rustls / rcgen     | latest         | Pure-Rust TLS stack, no OpenSSL dependency        |
+| Middleware       | tower / tower-http | latest / 0.5.2 | Request tracing, compression, timeouts            |
 
 ---
 
@@ -104,15 +111,15 @@ Port `9090` is an internal-only HTTP API, not exposed through Nginx. The Control
 
 All variables are required at boot unless a default is listed. Missing required variables cause the process to exit with a descriptive error before binding any port.
 
-| Variable | Description | Default |
-|---|---|---|
-| `DATABASE_URL` | Postgres connection string (`postgres://user:pass@host/db`) | **required** |
-| `REDIS_URL` | Redis server address | `redis://redis-cache:6379` |
-| `TLS_CERT_PATH` | Path to public SSL certificate (PEM) | `/app/certs/cert.pem` |
-| `TLS_KEY_PATH` | Path to private SSL key (PEM) | `/app/certs/key.pem` |
-| `PUBLIC_PORT` | Data Plane listener port | `8443` |
-| `ADMIN_PORT` | Control Plane admin API port | `9090` |
-| `JWT_SECRET` | HMAC secret for JWT signing and verification | **required** |
+| Variable        | Description                                                 | Default                    |
+| --------------- | ----------------------------------------------------------- | -------------------------- |
+| `DATABASE_URL`  | Postgres connection string (`postgres://user:pass@host/db`) | **required**               |
+| `REDIS_URL`     | Redis server address                                        | `redis://redis-cache:6379` |
+| `TLS_CERT_PATH` | Path to public SSL certificate (PEM)                        | `/app/certs/cert.pem`      |
+| `TLS_KEY_PATH`  | Path to private SSL key (PEM)                               | `/app/certs/key.pem`       |
+| `PUBLIC_PORT`   | Data Plane listener port                                    | `8443`                     |
+| `ADMIN_PORT`    | Control Plane admin API port                                | `9090`                     |
+| `JWT_SECRET`    | HMAC secret for JWT signing and verification                | **required**               |
 
 > **Security note:** `JWT_SECRET` must be at least 256 bits of cryptographically random data. Generate with: `openssl rand -hex 32`
 
@@ -309,14 +316,14 @@ sequenceDiagram
 
 ### Defense layers
 
-| Layer | Mechanism | Where |
-|---|---|---|
-| TLS | rustls — no OpenSSL dependency | Port `8443` |
-| Authentication | JWT HS256 + Postgres user record | Axum middleware |
-| Password storage | Argon2id | Postgres (users table) |
-| Cookie policy | `SameSite=None; Secure; HttpOnly` | Session issuance |
-| Rate limiting | Per-identity Redis counter | Hot path |
-| Admin isolation | Port `9090` not exposed through Nginx | Docker network policy |
+| Layer            | Mechanism                             | Where                  |
+| ---------------- | ------------------------------------- | ---------------------- |
+| TLS              | rustls — no OpenSSL dependency        | Port `8443`            |
+| Authentication   | JWT HS256 + Postgres user record      | Axum middleware        |
+| Password storage | Argon2id                              | Postgres (users table) |
+| Cookie policy    | `SameSite=None; Secure; HttpOnly`     | Session issuance       |
+| Rate limiting    | Per-identity Redis counter            | Hot path               |
+| Admin isolation  | Port `9090` not exposed through Nginx | Docker network policy  |
 
 ### Threat model assumptions
 
@@ -330,12 +337,12 @@ sequenceDiagram
 
 The Control Plane communicates with the gateway via this private HTTP interface. All endpoints are unauthenticated by design — network isolation (Docker internal network) is the only access control.
 
-| Method | Path | Body | Effect |
-|---|---|---|---|
-| `POST` | `/admin/throttle` | `{ "identity": "ip\|user_id", "limit": n, "window_s": n }` | Apply rate limit override |
-| `POST` | `/admin/pardon` | `{ "identity": "ip\|user_id" }` | Lift existing throttle |
-| `GET` | `/admin/metrics` | — | Return current metrics snapshot (JSON) |
-| `GET` | `/admin/health` | — | Liveness check (`200 OK`) |
+| Method | Path              | Body                                                       | Effect                                 |
+| ------ | ----------------- | ---------------------------------------------------------- | -------------------------------------- |
+| `POST` | `/admin/throttle` | `{ "identity": "ip\|user_id", "limit": n, "window_s": n }` | Apply rate limit override              |
+| `POST` | `/admin/pardon`   | `{ "identity": "ip\|user_id" }`                            | Lift existing throttle                 |
+| `GET`  | `/admin/metrics`  | —                                                          | Return current metrics snapshot (JSON) |
+| `GET`  | `/admin/health`   | —                                                          | Liveness check (`200 OK`)              |
 
 > The Security Guard (`guard/`) is the only intended caller of this API. Do not expose port `9090` in `docker-compose.yml` port mappings.
 
@@ -415,6 +422,7 @@ The gateway depends on both Postgres and Redis being healthy before it can serve
 ### Redis unavailability behavior
 
 If Redis becomes unreachable mid-operation:
+
 - Rate limiting falls back to **permissive** (requests are not blocked)
 - Metrics writes are silently dropped (no client impact)
 - Session state reads fail gracefully — the gateway falls back to JWT-only auth
@@ -435,10 +443,10 @@ RUST_LOG=info cargo run
 
 ## Related Services
 
-| Service | Path | Description |
-|---|---|---|
-| Security Guard | `control-plane/` | Python Control Plane — polls metrics, escalates to LLM |
-| Nginx SPA | `frontend/` | Static frontend — proxies to this gateway |
-| DoH Resolver | `doh/` | DNS-over-HTTPS handler embedded in the Data Plane |
-| Compose config | `docker-compose.yml` | Full stack orchestration |
-| Certs | `certs/` | TLS certificates (gitignored) |
+| Service        | Path                 | Description                                            |
+| -------------- | -------------------- | ------------------------------------------------------ |
+| Security Guard | `control-plane/`     | Python Control Plane — polls metrics, escalates to LLM |
+| Nginx SPA      | `frontend/`          | Static frontend — proxies to this gateway              |
+| DoH Resolver   | `doh/`               | DNS-over-HTTPS handler embedded in the Data Plane      |
+| Compose config | `docker-compose.yml` | Full stack orchestration                               |
+| Certs          | `certs/`             | TLS certificates (gitignored)                          |

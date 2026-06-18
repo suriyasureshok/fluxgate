@@ -5,3 +5,4 @@ uvicorn
 starlette
 sse_starlette
 redis
+uvicorn

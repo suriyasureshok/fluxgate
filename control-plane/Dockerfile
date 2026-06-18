@@ -1,5 +1,5 @@
-# Use the official, minimal Python 3.11 slim image (matches Debian Bookworm)
-FROM python:3.11-slim-bookworm
+# Use the official, minimal Python 3.12 slim image (matches Debian Bookworm)
+FROM python:3.12-slim-bookworm
 
 # --- 1. Python Environment Standards ---
 # Prevent Python from writing .pyc files to disk (reduces container size)

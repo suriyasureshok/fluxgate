@@ -1,26 +1,104 @@
-version: '3.8'
-
 services:
-  # 1. The Rust Data Plane (Your Semantic Token Bucket)
+  # --- SINGLE SOURCE OF TRUTH ---
+  redis-cache:
+    image: redis:7-alpine
+    container_name: fluxgate-redis
+    command: redis-server --save 60 1 --loglevel warning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fluxgate-net
+
+  # --- 1. The Rust Data Plane (Heavy Lifting & Rate Limiting) ---
   gateway:
     build:
       context: ./gateway
-      dockerfile: Dockerfile
     container_name: fluxgate-gateway
+    environment:
+      - DOWNSTREAM_AI_URLS=${DOWNSTREAM_AI_URLS:-http://host.docker.internal:11434}
+      - REDIS_URL=redis://redis-cache:6379  
+      - DATABASE_URL=postgresql://postgres.yewyfdqlluzxlgzyzrey:suriya_1312@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres
+      - TLS_CERT_PATH=/app/certs/api.fluxgate.local+2.pem
+      - TLS_KEY_PATH=/app/certs/api.fluxgate.local+2-key.pem
+      - CLUSTER_IPS=${CLUSTER_IPS:-127.0.0.1}
+      - CLUSTER_DOMAIN=${CLUSTER_DOMAIN:-api.fluxgate.local}
+      - JWT_SECRET=${JWT_SECRET:-super_secret_dev_key}
+      - PUBLIC_PORT=8443
+      - ADMIN_PORT=9090
+      - RUST_LOG=info
     ports:
       - "8443:8443"
-    environment:
-      - DOWNSTREAM_AI_URL=http://host.docker.internal:11434
-      - RUST_LOG=info
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "9090:9090"
+    depends_on:
+      redis-cache:
+        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - fluxgate-net
 
-  # 2. The Cloudflare Quick Tunnel (Free Public Internet Access)
+  # --- 2. The Nginx Frontend (Lightweight UI & Cache) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fluxgate-ui
+    ports:
+      - "3000:80" # Allows local testing at http://localhost:3000
+    depends_on:
+      - gateway
+    restart: unless-stopped
+    networks:
+      - fluxgate-net
+
+  # --- 3. The Python Control Plane (Algorithm + MCP Server) ---
+  control-plane:
+    build:
+      context: ./control-plane
+      dockerfile: Dockerfile
+    container_name: fluxgate-agent
+    volumes:
+      - ./control-plane:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis-cache:6379
+      - GATEWAY_ADMIN_URL=http://gateway:9090
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
+      - LLM_MODEL=phi4-mini
+    depends_on:
+      gateway:
+        condition: service_started
+      redis-cache:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fluxgate-net
+
+  # --- 4. The Public Ingress (Zero-Trust Cloudflare) ---
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: fluxgate-tunnel
-    command: tunnel --url https://gateway:8443 --no-tls-verify
+    command: tunnel --url http://frontend:80 
     restart: unless-stopped
     depends_on:
-      - gateway
+      - frontend
+    networks:
+      - fluxgate-net
+
+networks:
+  fluxgate-net:
+    driver: bridge
