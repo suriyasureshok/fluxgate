@@ -49,7 +49,7 @@ pub struct Claims {
 }
 
 fn get_jwt_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| "super_secret_dev_key".to_string())
+    std::env::var("JWT_SECRET").expect("JWT_SECRET environment variable must be set")
 }
 
 pub async fn register(
