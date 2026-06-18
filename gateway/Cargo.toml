@@ -4,21 +4,46 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.7"
-async-trait = "0.1"
+# Web Framework & Server
+axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5.2", features = ["cors"] }
+
+# Logging & Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# HTTP Client
 reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Database (PostgreSQL)
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+
+# Redis Cache
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = "0.14"
+
+# Authentication & Security
+argon2 = "0.5.3"
+jsonwebtoken = "10.4.0"
+sha2 = "0.11"      # For secure API Key hashing
+hex = "0.4"        # To convert hashes to strings
+rand = "0.8"
+
+# UUID & Identity
+uuid = { version = "1.8", features = ["v4", "serde"] }  # Using latest version
+
+# DNS
 trust-dns-proto = "0.23"
+
+# CLI & Environment
 clap = { version = "4.0", features = ["derive"] }
 dotenvy = "0.15"
-redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
-sha2 = "0.10" # For secure API Key hashing
-hex = "0.4"   # To convert hashes to strings
-rand = "0.8"
-uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Async Utilities
+async-trait = "0.1"
