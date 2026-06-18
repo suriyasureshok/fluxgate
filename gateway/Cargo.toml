@@ -1,49 +1,56 @@
 [package]
-name = "gateway"
-version = "0.1.0"
+name = "fluxgate-gateway"
+version = "1.0.0"
 edition = "2024"
+authors = ["Suriya Sureshkumar <suriyasureshkumarkannian@gmail.com>"]
+description = "High-performance edge data plane and reverse proxy for Fluxgate"
+publish = false
 
 [dependencies]
-# Web Framework & Server
+# --- Web Framework & Server ---
 axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5.2", features = ["cors"] }
+tower = "0.4"
+tower-http = { version = "0.5.2", features = ["cors", "trace", "fs"] }
 
-# Logging & Tracing
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# --- HTTP Client (Proxying) ---
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# HTTP Client
-reqwest = { version = "0.12", features = ["json", "stream"] }
-
-# Database (PostgreSQL)
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
-
-# Redis Cache
+# --- Database & State ---
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 deadpool-redis = "0.14"
 
-# Authentication & Security
+# --- Authentication & Security ---
 argon2 = "0.5.3"
 jsonwebtoken = "10.4.0"
-sha2 = "0.11"      # For secure API Key hashing
-hex = "0.4"        # To convert hashes to strings
+sha2 = "0.11"
+hex = "0.4"
 rand = "0.8"
 
-# UUID & Identity
-uuid = { version = "1.8", features = ["v4", "serde"] }  # Using latest version
+# --- Serialization & Data Structures ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
-# DNS
-trust-dns-proto = "0.23"
+# --- Observability & Logging ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# CLI & Environment
+# --- CLI, Environment & Networking ---
 clap = { version = "4.0", features = ["derive"] }
 dotenvy = "0.15"
-
-# Async Utilities
+trust-dns-proto = "0.23"
 async-trait = "0.1"
+
+# --- Production Optimizations ---
+# These settings instruct the Rust compiler to aggressively optimize the 
+# binary for maximum speed and minimum size, critical for a reverse proxy.
+[profile.release]
+opt-level = 3          # Maximize runtime speed
+lto = true             # Link Time Optimization (cross-crate optimization)
+codegen-units = 1      # Compile as a single unit for better LTO (slower build, faster binary)
+panic = "abort"        # Instantly terminate on panic (saves memory/binary size)
+strip = true           # Remove debug symbols to minimize container footprint
