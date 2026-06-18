@@ -7,6 +7,7 @@ use crate::doh::DnsProvider;
 use serde::Deserialize;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 // --- Standardized Public DoH Endpoints ---
 pub const PROVIDER_CLOUDFLARE: &str = "https://cloudflare-dns.com/dns-query";
@@ -23,29 +24,34 @@ struct DohJsonResponse {
 #[derive(Deserialize, Debug)]
 struct DohAnswer {
     #[serde(rename = "type")]
-    record_type: u16, // Type 1 = A (IPv4), Type 28 = AAAA (IPv6)
-    data: String, // The actual IP address string
+    record_type: u16,
+    data: String,
 }
 
-/// A generic DoH resolver that connects to standard public JSON DoH APIs.
+/// A generic DoH resolver connecting to standard public JSON DoH APIs.
 pub struct UpstreamProvider {
-    /// The configured DoH endpoint URL (e.g., Cloudflare, Google)
+    /// Configured DoH endpoint URL.
     endpoint_url: String,
-    /// An asynchronous HTTP client (reused for connection pooling)
+    /// Asynchronous, pooled HTTP client with strict timeout guards.
     client: reqwest::Client,
 }
 
 impl UpstreamProvider {
-    /// Initializes a new UpstreamProvider targeting a specific DoH URL.
+    /// Initializes a heavily guarded UpstreamProvider.
     ///
-    /// # Example
-    /// ```
-    /// let provider = UpstreamProvider::new(PROVIDER_CLOUDFLARE);
-    /// ```
+    /// Configures connection pooling and strict timeouts to prevent
+    /// thread-pinning during upstream DNS outages.
     pub fn new(endpoint_url: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3)) // Hard 3-second drop to prevent hanging
+            .pool_idle_timeout(Duration::from_secs(60))
+            .pool_max_idle_per_host(10)
+            .build()
+            .expect("CRITICAL: Failed to build UpstreamProvider HTTP client");
+
         Self {
             endpoint_url: endpoint_url.to_string(),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 }
@@ -55,7 +61,7 @@ impl DnsProvider for UpstreamProvider {
     async fn resolve(&self, domain: &str) -> Option<Vec<IpAddr>> {
         let mut ips = Vec::new();
 
-        // Query both A and AAAA records
+        // Query both IPv4 (A) and IPv6 (AAAA) records
         for record_type in ["A", "AAAA"] {
             let url = format!("{}?name={}&type={}", self.endpoint_url, domain, record_type);
 

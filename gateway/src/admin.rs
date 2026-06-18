@@ -12,46 +12,42 @@ use uuid::Uuid;
 
 use crate::infrastructure::GatewayState;
 
-// --- Data Structures ---
-
 #[derive(Deserialize)]
 pub struct GenerateKeyRequest {
-    pub user_id: Uuid, // The UUID of the user from the `users` table
+    pub user_id: Uuid,
 }
 
 #[derive(Serialize)]
 pub struct GenerateKeyResponse {
     pub user_id: Uuid,
-    pub api_key: String, // The cleartext key (Only shown this one time)
+    pub api_key: String,
     pub message: String,
 }
-
-// --- IAM Endpoints ---
 
 /// Generates a secure API key, hashes it, stores the hash, and returns the cleartext.
 pub async fn generate_api_key(
     State(state): State<Arc<GatewayState>>,
     Json(payload): Json<GenerateKeyRequest>,
 ) -> Result<Json<GenerateKeyResponse>, (StatusCode, String)> {
-    // 1. Cryptographic Generation: Create 32 random bytes
+    // 1. Cryptographic Generation: 32 bytes of high-entropy randomness
     let secret: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(32)
         .map(char::from)
         .collect();
 
-    // 2. Format the Key: Prepend our environment identifier
     let cleartext_key = format!("sk_live_{}", secret);
-
-    // 3. Extract the UX Prefix: For the dashboard (e.g., "sk_live_abcde...")
     let key_prefix: String = cleartext_key.chars().take(15).collect();
 
-    // 4. Secure Hashing: We only store the SHA-256 hash in Postgres
+    // 2. Secure Hashing
+    // ARCHITECTURE NOTE: We use SHA-256 here instead of Argon2 because the input
+    // entropy (190+ bits) is mathematically immune to brute-force/rainbow table attacks.
+    // This allows us to keep authentication ultra-fast without sacrificing security.
     let mut hasher = Sha256::new();
     hasher.update(cleartext_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
 
-    // 5. Execute the Insertion
+    // 3. Execute the Insertion into Managed Postgres
     let result =
         sqlx::query("INSERT INTO api_keys (user_id, key_hash, key_prefix, status) VALUES ($1, $2, $3, 'active')")
             .bind(payload.user_id)
@@ -68,7 +64,7 @@ pub async fn generate_api_key(
                 .to_string(),
         })),
         Err(e) => {
-            tracing::error!("Failed to generate API Key: {}", e);
+            tracing::error!("Failed to provision credentials: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to provision credentials".to_string(),
