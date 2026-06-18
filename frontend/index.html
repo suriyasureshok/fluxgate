@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fluxgate Developer Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Custom scrollbar for the streaming text box */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1f2937;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #4b5563;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body
+    class="bg-gray-900 text-gray-100 min-h-screen font-sans selection:bg-blue-500 selection:text-white"
+  >
+    <nav
+      class="bg-gray-800 border-b border-gray-700 px-6 py-4 flex justify-between items-center"
+    >
+      <div class="flex items-center space-x-3">
+        <div
+          class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold"
+        >
+          F
+        </div>
+        <span class="text-xl font-semibold tracking-tight"
+          >Fluxgate Gateway</span
+        >
+      </div>
+      <button
+        id="logoutBtn"
+        onclick="logout()"
+        class="hidden text-sm text-gray-400 hover:text-white transition"
+      >
+        Sign Out
+      </button>
+    </nav>
+
+    <main class="max-w-5xl mx-auto mt-10 px-6 pb-20">
+      <div
+        id="authView"
+        class="max-w-md mx-auto bg-gray-800 rounded-xl shadow-2xl border border-gray-700 overflow-hidden"
+      >
+        <div class="flex border-b border-gray-700">
+          <button
+            onclick="switchTab('login')"
+            id="tabLogin"
+            class="flex-1 py-4 text-center font-medium text-blue-400 border-b-2 border-blue-500 bg-gray-800/50"
+          >
+            Log In
+          </button>
+          <button
+            onclick="switchTab('register')"
+            id="tabRegister"
+            class="flex-1 py-4 text-center font-medium text-gray-400 border-b-2 border-transparent hover:text-gray-200"
+          >
+            Sign Up
+          </button>
+        </div>
+
+        <div class="p-8">
+          <p
+            id="authError"
+            class="hidden text-red-400 text-sm mb-4 bg-red-900/20 p-3 rounded-lg border border-red-800/50"
+          ></p>
+
+          <form id="authForm" onsubmit="handleAuth(event)" class="space-y-5">
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-1"
+                >Email Address</label
+              >
+              <input
+                type="email"
+                id="email"
+                required
+                class="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-400 mb-1"
+                >Password</label
+              >
+              <input
+                type="password"
+                id="password"
+                required
+                class="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+              />
+            </div>
+            <button
+              type="submit"
+              id="submitBtn"
+              class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg shadow-lg shadow-blue-900/20 transition duration-200"
+            >
+              Authenticate
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div id="dashboardView" class="hidden space-y-8">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div class="bg-gray-800 p-6 rounded-xl border border-gray-700">
+            <p class="text-sm text-gray-400">Account ID</p>
+            <p id="dashUserId" class="font-mono text-sm mt-1 truncate">...</p>
+          </div>
+          <div class="bg-gray-800 p-6 rounded-xl border border-gray-700">
+            <p class="text-sm text-gray-400">Active Tier</p>
+            <p
+              id="dashTier"
+              class="text-xl font-semibold text-blue-400 mt-1 uppercase"
+            >
+              ...
+            </p>
+          </div>
+          <div
+            class="bg-gray-800 p-6 rounded-xl border border-gray-700 flex items-center justify-between"
+          >
+            <div>
+              <p class="text-sm text-gray-400">Provisioning</p>
+              <p class="text-lg font-semibold mt-1">Access Keys</p>
+            </div>
+            <button
+              onclick="generateKey()"
+              class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm font-medium transition shadow-lg"
+            >
+              Generate Key
+            </button>
+          </div>
+        </div>
+
+        <div
+          id="newKeyAlert"
+          class="hidden bg-emerald-900/30 border border-emerald-800 p-6 rounded-xl"
+        >
+          <h3 class="text-emerald-400 font-semibold mb-2">
+            CRITICAL: Save Your API Key
+          </h3>
+          <p class="text-sm text-gray-300 mb-4">
+            This key will only be displayed once. If you lose it, you must
+            generate a new one.
+          </p>
+          <div class="flex items-center space-x-4">
+            <code
+              id="newKeyValue"
+              class="flex-1 bg-gray-900 px-4 py-3 rounded-lg border border-gray-700 text-emerald-300 font-mono text-sm break-all"
+            ></code>
+            <button
+              onclick="copyKey()"
+              class="bg-gray-700 hover:bg-gray-600 px-4 py-3 rounded-lg text-sm transition"
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <div
+          class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-2xl mt-8"
+        >
+          <div
+            class="bg-gray-900/50 px-6 py-4 border-b border-gray-700 flex justify-between items-center"
+          >
+            <h2 class="font-semibold text-gray-200">Gateway Streaming Test</h2>
+            <span class="flex h-3 w-3 relative">
+              <span
+                id="streamPulse"
+                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 hidden"
+              ></span>
+              <span
+                class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"
+              ></span>
+            </span>
+          </div>
+          <div class="p-6">
+            <div class="flex space-x-4 mb-4">
+              <input
+                type="text"
+                id="aiPrompt"
+                placeholder="Ask the AI something..."
+                class="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
+              />
+              <input
+                type="text"
+                id="testApiKey"
+                placeholder="sk_live_..."
+                class="w-48 bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
+              />
+              <button
+                onclick="testStreamingProxy()"
+                class="bg-purple-600 hover:bg-purple-500 px-6 py-2 rounded-lg font-medium transition shadow-lg"
+              >
+                Send
+              </button>
+            </div>
+            <div
+              id="aiResponse"
+              class="w-full h-64 bg-gray-900 border border-gray-700 rounded-lg p-4 font-mono text-sm text-gray-300 overflow-y-auto whitespace-pre-wrap"
+            >
+              Awaiting connection to Data Plane...
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      // ==========================================
+      // CONFIGURATION
+      // ==========================================
+      const API_BASE = "https://localhost:8443";
+      let currentMode = "login";
+      let currentUser = null;
+
+      // ==========================================
+      // UI HELPERS
+      // ==========================================
+      function switchTab(mode) {
+        currentMode = mode;
+        document.getElementById("authError").classList.add("hidden");
+        document.getElementById("submitBtn").innerText =
+          mode === "login" ? "Authenticate" : "Create Account";
+
+        if (mode === "login") {
+          document.getElementById("tabLogin").className =
+            "flex-1 py-4 text-center font-medium text-blue-400 border-b-2 border-blue-500 bg-gray-800/50";
+          document.getElementById("tabRegister").className =
+            "flex-1 py-4 text-center font-medium text-gray-400 border-b-2 border-transparent hover:text-gray-200";
+        } else {
+          document.getElementById("tabRegister").className =
+            "flex-1 py-4 text-center font-medium text-blue-400 border-b-2 border-blue-500 bg-gray-800/50";
+          document.getElementById("tabLogin").className =
+            "flex-1 py-4 text-center font-medium text-gray-400 border-b-2 border-transparent hover:text-gray-200";
+        }
+      }
+
+      function showError(msg) {
+        const errEl = document.getElementById("authError");
+        errEl.innerText = msg;
+        errEl.classList.remove("hidden");
+      }
+
+      function toggleViews(isAuthenticated) {
+        document
+          .getElementById("authView")
+          .classList.toggle("hidden", isAuthenticated);
+        document
+          .getElementById("dashboardView")
+          .classList.toggle("hidden", !isAuthenticated);
+        document
+          .getElementById("logoutBtn")
+          .classList.toggle("hidden", !isAuthenticated);
+      }
+
+      // ==========================================
+      // AUTHENTICATION & SESSIONS
+      // ==========================================
+      async function checkSession() {
+        const token = sessionStorage.getItem("portal_token");
+        if (!token) {
+          toggleViews(false);
+          return;
+        }
+
+        try {
+          const res = await fetch(`${API_BASE}/portal/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            currentUser = await res.json();
+            document.getElementById("dashUserId").innerText = currentUser.sub;
+            document.getElementById("dashTier").innerText = currentUser.tier;
+            toggleViews(true);
+          } else {
+            sessionStorage.removeItem("portal_token");
+            toggleViews(false);
+          }
+        } catch (e) {
+          toggleViews(false);
+        }
+      }
+
+      async function handleAuth(e) {
+        e.preventDefault();
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+        const endpoint =
+          currentMode === "login" ? "/portal/login" : "/portal/register";
+
+        try {
+          const res = await fetch(`${API_BASE}${endpoint}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+
+          if (res.ok) {
+            if (currentMode === "register") {
+              switchTab("login");
+              handleAuth(e);
+            } else {
+              const data = await res.json();
+              sessionStorage.setItem("portal_token", data.token); // Save the JWT
+              checkSession(); // Validate and load dashboard
+            }
+          } else {
+            const text = await res.text();
+            showError(text || "Authentication failed");
+          }
+        } catch (err) {
+          showError("Network error. Is the Gateway running?");
+        }
+      }
+
+      async function logout() {
+        sessionStorage.removeItem("portal_token");
+        currentUser = null;
+        document.getElementById("newKeyAlert").classList.add("hidden");
+        document.getElementById("password").value = "";
+        toggleViews(false);
+      }
+
+      // ==========================================
+      // GATEWAY INTERACTION
+      // ==========================================
+      async function generateKey() {
+        try {
+          // Hitting the secure gateway on 8443, which will route to admin logic
+          const res = await fetch(`http://localhost:9090/admin/keys/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: currentUser.sub }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            document.getElementById("newKeyValue").innerText = data.api_key;
+            document.getElementById("testApiKey").value = data.api_key;
+            document.getElementById("newKeyAlert").classList.remove("hidden");
+          } else {
+            alert("Failed to provision key. Check Rust logs.");
+          }
+        } catch (err) {
+          alert("Network error reaching Control Plane.");
+        }
+      }
+
+      function copyKey() {
+        navigator.clipboard.writeText(
+          document.getElementById("newKeyValue").innerText,
+        );
+        alert("API Key copied to clipboard!");
+      }
+
+      // ==========================================
+      // CHUNKED STREAMING IMPLEMENTATION
+      // ==========================================
+      async function testStreamingProxy() {
+        const prompt = document.getElementById("aiPrompt").value;
+        const apiKey = document.getElementById("testApiKey").value;
+        const responseBox = document.getElementById("aiResponse");
+        const pulse = document.getElementById("streamPulse");
+
+        if (!apiKey || !prompt) {
+          alert("Please generate an API Key and enter a prompt first.");
+          return;
+        }
+
+        responseBox.innerText = "";
+        pulse.classList.remove("hidden");
+
+        const payload = {
+          model: "phi4-mini",
+          messages: [
+            // 1. Give the model a "System" persona to define its tone
+            {
+              role: "system",
+              content:
+                "You are a concise assistant. Provide short, direct, and brief answers. Avoid unnecessary fluff.",
+            },
+            { role: "user", content: prompt },
+          ],
+          stream: true,
+          // 2. Generation parameters to hard-cap the output
+          max_tokens: 150, // Limits the response length
+          temperature: 0.3, // Lower temperature makes the model less "creative" and more focused
+        };
+
+        try {
+          const response = await fetch(`${API_BASE}/v1/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`, // Using the Data Plane API key here
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            const err = await response.text();
+            responseBox.innerText = `Gateway Error [${response.status}]: ${err}`;
+            pulse.classList.add("hidden");
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+
+            const lines = chunk.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ") && line !== "data: [DONE]") {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  // OpenAI stream format uses choices[0].delta.content
+                  if (
+                    data.choices &&
+                    data.choices[0].delta &&
+                    data.choices[0].delta.content
+                  ) {
+                    responseBox.innerText += data.choices[0].delta.content;
+                    responseBox.scrollTop = responseBox.scrollHeight;
+                  }
+                } catch (e) {
+                  // Ignore partial chunks
+                }
+              }
+            }
+          }
+        } catch (err) {
+          responseBox.innerText = `Network/CORS Error: ${err.message}`;
+        } finally {
+          pulse.classList.add("hidden");
+        }
+      }
+
+      // Initialize
+      checkSession();
+    </script>
+  </body>
+</html>
