@@ -26,7 +26,7 @@ services:
     environment:
       - DOWNSTREAM_AI_URLS=${DOWNSTREAM_AI_URLS:-http://host.docker.internal:11434}
       - REDIS_URL=redis://redis-cache:6379  
-      - DATABASE_URL=postgresql://postgres.yewyfdqlluzxlgzyzrey:suriya_1312@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres
+      - DATABASE_URL=postgresql://postgres.yewyfdqlluzxlgzyzrey:your_pass@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres
       - TLS_CERT_PATH=/app/certs/api.fluxgate.local+2.pem
       - TLS_KEY_PATH=/app/certs/api.fluxgate.local+2-key.pem
       - CLUSTER_IPS=${CLUSTER_IPS:-127.0.0.1}
